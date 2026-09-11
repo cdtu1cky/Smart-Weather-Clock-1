@@ -1,4 +1,4 @@
-# 基于 STM32F103C8 的智能天气时钟
+# 基于 STM32F103C8 + Freertos的智能天气时钟
 
 基于 **STM32F103C8T6** 打造的桌面天气时钟：本地走时 + WiFi 自动校时 + 网络天气 + 室内测温，实时显示在 TFT 彩屏上。
 
@@ -176,6 +176,4 @@ flowchart TB
 
 **技术栈**：`STM32F103C8` `C` `标准外设库` `FreeRTOS` `队列/信号量/互斥量/任务通知` `SPI+DMA` `ST7735` `USART/中断` `软件I2C` `RTC/SNTP` `ESP32-AT` `HTTP/JSON` `IWDG 看门狗`
 
-## 演示
-![1](3247a736c96deedfbce5c62497df5345.jpg)
 
