@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <string.h>
 #include "stm32f10x.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "main.h"
 #include "lcd_spi.h"
 #include "st7735.h"
@@ -112,12 +114,22 @@ static const uint8_t init_cmd_list[] =
 };
 
 static volatile bool spi_async_done;
+static TaskHandle_t xSpiWaitingTask;      // 正在等 DMA 完成的任务
 static uint8_t gram_buff[GRAM_BUFFER_SIZE];
 
 
+// DMA 传输完成中断回调
 static void spi_on_async_finish(void)
 {
     spi_async_done = true;
+
+    if (xSpiWaitingTask != NULL)
+    {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+        vTaskNotifyGiveFromISR(xSpiWaitingTask, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
 }
 
 static void st7735_select(void)
@@ -151,9 +163,25 @@ static void st7735_write_cmd(uint8_t cmd)
 static void st7735_write_data(uint8_t *data, size_t size)
 {
     GPIO_WriteBit(DC_PORT, DC_PIN, Bit_SET);
-    spi_async_done = false;
-    lcd_spi_write_async(data, size);
-    while (!spi_async_done);
+
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED)
+    {
+        // 调度器还没启动，只能忙等
+        spi_async_done = false;
+        lcd_spi_write_async(data, size);
+        while (!spi_async_done);
+    }
+    else
+    {
+        // 先记下当前任务再启动 DMA，否则 DMA 完成后找不到要通知的任务
+        xSpiWaitingTask = xTaskGetCurrentTaskHandle();
+
+        lcd_spi_write_async(data, size);
+
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // 等 DMA 完成中断唤醒
+
+        xSpiWaitingTask = NULL;
+    }
 }
 
 static void st7735_exec_cmds(const uint8_t *cmd_list)

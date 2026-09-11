@@ -1,11 +1,11 @@
-/**
+﻿/**
   ******************************************************************************
-  * @file    Project/STM32F10x_StdPeriph_Template/stm32f10x_it.c 
+  * @file    Project/STM32F10x_StdPeriph_Template/stm32f10x_it.c
   * @author  MCD Application Team
   * @version V3.6.0
   * @date    20-September-2021
   * @brief   Main Interrupt Service Routines.
-  *          This file provides template for all exceptions handler and 
+  *          This file provides template for all exceptions handler and
   *          peripherals interrupt service routine.
   ******************************************************************************
   * @attention
@@ -104,9 +104,12 @@ void UsageFault_Handler(void)
   * @param  None
   * @retval None
   */
+/* 这三个异常处理函数由 FreeRTOS 提供，这里注释掉，否则会重复定义 */
+#if 0
 void SVC_Handler(void)
 {
 }
+#endif
 
 /**
   * @brief  This function handles Debug Monitor exception.
@@ -117,23 +120,17 @@ void DebugMon_Handler(void)
 {
 }
 
-/**
-  * @brief  This function handles PendSVC exception.
-  * @param  None
-  * @retval None
-  */
+#if 0
 void PendSV_Handler(void)
 {
 }
+#endif
 
-/**
-  * @brief  This function handles SysTick Handler.
-  * @param  None
-  * @retval None
-  */
+#if 0
 void SysTick_Handler(void)
 {
 }
+#endif
 
 /******************************************************************************/
 /*                 STM32F10x Peripherals Interrupt Handlers                   */
@@ -153,6 +150,6 @@ void SysTick_Handler(void)
 
 /**
   * @}
-  */ 
+  */
 
 
