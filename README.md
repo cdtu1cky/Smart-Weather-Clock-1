@@ -145,22 +145,22 @@ flowchart TB
 
 1. **烧录 ESP32-C3 AT 固件**：使用乐鑫官方 ESP-AT（esp32c3 版本），确认 `AT` 返回 `OK`。
 2. **接线**：按上文连接 STM32 / ESP32-C3 / 屏幕（记得共地、3.3V 供电）。
-3. **配置**：修改 `app/main.c` 顶部的 WiFi 账号密码、城市与天气 API Key：
+3. **配置**：修改 app/main.c 顶部的 WiFi 账号密码、城市与天气 API Key：
    ```c
    static const char *wifi_ssid    = "你的WiFi";
    static const char *wifi_password = "你的密码";
    static const char *city_name    = "chengdu";   // 显示地点
    static const char *weather_uri  = "https://api.seniverse.com/v3/weather/now.json?key=你的KEY&location=chengdu&language=en&unit=c";
    ```
-4. **编译烧录**：Keil 打开 `mdk/stm32f103.uvprojx` → F7 编译 → F8 烧录（ST-Link SWD：SWDIO/SWCLK/GND/3.3V）。
-5. 上电后屏幕依次提示 `Initializing → Wait ESP32 → Ready` 即联网成功。
+4. **编译烧录**：Keil 打开 mdk/stm32f103.uvprojx → F7 编译 → F8 烧录（ST-Link SWD：SWDIO/SWCLK/GND/3.3V）。
+5. 上电后屏幕依次提示 Initializing → Wait ESP32 → Ready 即联网成功。
 
 ## 编译与调试注意
 
-1. **FreeRTOS 内核已包含在工程中**（`third_lib/freertos`），Keil 工程的 include 路径与源文件都已配好，直接 **Rebuild** 即可。
-2. **用到的 FreeRTOS API 必须在 `app/FreeRTOSConfig.h` 里使能**：`INCLUDE_vTaskDelay`、`INCLUDE_vTaskDelayUntil`、`INCLUDE_xTaskGetSchedulerState` 等**默认值是 0**，漏了会报 `Undefined symbol`。
-3. **调试时建议先关看门狗**：把 `main.c` 里的 `#define USE_WATCHDOG 1` 改成 `0`（IWDG 超时约 4 秒，单步调试停在断点会被复位）。
-4. **RAM 余量**：STM32F103C8 只有 20KB RAM，`configTOTAL_HEAP_SIZE` 当前为 6KB；若任务创建失败（返回 `pdFAIL`），调小堆或缩小任务栈。
+1. **FreeRTOS 内核已包含在工程中**（third_lib/freertos），Keil 工程的 include 路径与源文件都已配好，直接 **Rebuild** 即可。
+2. **用到的 FreeRTOS API 必须在 app/FreeRTOSConfig.h 里使能**：INCLUDE_vTaskDelay、INCLUDE_vTaskDelayUntil、INCLUDE_xTaskGetSchedulerState等**默认值是 0**，漏了会报 Undefined symbol。
+3. **调试时建议先关看门狗**：把 main.c 里的 #define USE_WATCHDOG 1 改成 0（IWDG 超时约 4 秒，单步调试停在断点会被复位）。
+4. **RAM 余量**：STM32F103C8 只有 20KB RAM，configTOTAL_HEAP_SIZE 当前为 6KB；若任务创建失败（返回 pdFAIL），调小堆或缩小任务栈。
 5. **源文件编码**：统一为 UTF-8 with BOM，Keil 与 VS Code 都能正确显示中文注释。
 
 ## 演示
