@@ -1,4 +1,4 @@
-﻿#include <stdbool.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,6 +13,7 @@
 #include "stfonts.h"
 #include "stimage.h"
 #include "weather.h"
+#include "key.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -92,6 +93,21 @@ static void vTaskMonitor(void *pvParameters)
 }
 
 static uint32_t disp_height;         // 开机信息显示位置
+
+// 任务句柄（系统信息页要查询各�;9�务的栈余量）
+static TaskHandle_t hTaskAT;
+static TaskHandle_t hTaskDisplay;
+static TaskHandle_t hTaskSensor;
+static TaskHandle_t hTaskMonitor;
+
+// 当前页面：0=时钟页 1=系统信息页
+#define PAGE_CLOCK      0
+#define PAGE_INFO       1
+#define PAGE_COUNT      2
+static uint8_t g_page;
+
+// 画页面的固定内容（切页时调用一次）
+static void page_draw_static(uint8_t page);
 
 static void lcd_lock(void)   { xSemaphoreTake(xLcdMutex, portMAX_DELAY); }
 static void lcd_unlock(void) { xSemaphoreGive(xLcdMutex); }
@@ -231,11 +247,118 @@ static void vTaskSensor(void *pvParameters)
     }
 }
 
-// 显示任务：刷新屏幕
+// 画页面的固定内容
+static void page_draw_static(uint8_t page)
+{
+    if (page == PAGE_CLOCK)
+    {
+        st7735_fill_screen(ST7735_BLACK);
+        st7735_write_string(0, 112, "cky2304023133", &font_ascii_8x16, ST7735_WHITE, ST7735_BLACK);
+        st7735_write_string(48, 48, city_name, &font_ascii_8x16, ST7735_YELLOW, ST7735_BLACK);
+    }
+    else
+    {
+        st7735_fill_screen(ST7735_BLACK);
+        st7735_write_string(0, 0, "System Info", &font_ascii_8x16, ST7735_WHITE, ST7735_BLACK);
+        st7735_write_string(0, 112, "cky2304023133", &font_ascii_8x16, ST7735_WHITE, ST7735_BLACK);
+    }
+}
+
+// 时钟页刷新
+static void page_refresh_clock(void)
+{
+    char str[64];
+
+    // 日期和时间
+    rtc_date_t date;
+    rtc_get_date(&date);
+
+    snprintf(str, sizeof(str), "%02d-%02d-%02d", date.year % 100, date.month, date.day);
+    st7735_write_string(0, 0, str, &font_ascii_8x16, ST7735_WHITE, ST7735_BLACK);
+
+    snprintf(str, sizeof(str), "%02d%s%02d", date.hour, date.second % 2 ? " " : ":", date.minute);
+    st7735_write_string(0, 64, str, &font_time_24x48, ST7735_CYAN, ST7735_BLACK);
+
+    // 有新温度就更新
+    float temper;
+    if (xQueueReceive(xTemperQueue, &temper, 0) == pdPASS)
+    {
+        snprintf(str, sizeof(str), "%4.1f", temper);
+        st7735_write_string(78, 32, str, &font_ascii_8x16, ST7735_GREEN, ST7735_BLACK);
+        st7735_draw_image(78 + (uint32_t)strlen(str) * 8, 32,
+                          icon_wendu.width, icon_wendu.height, icon_wendu.data);
+    }
+
+    // 有新天气就更新
+    weather_t weather;
+    if (xQueueReceive(xWeatherQueue, &weather, 0) == pdPASS)
+    {
+        const st_image_t *img = NULL;
+        if (strcmp(weather.weather, "Cloudy") == 0)        img = &icon_weather_duoyun;
+        else if (strcmp(weather.weather, "Wind") == 0)     img = &icon_weather_feng;
+        else if (strcmp(weather.weather, "Clear") == 0)    img = &icon_weather_qing;
+        else if (strcmp(weather.weather, "Snow") == 0)     img = &icon_weather_xue;
+        else if (strcmp(weather.weather, "Overcast") == 0) img = &icon_weather_yin;
+        else if (strcmp(weather.weather, "Rain") == 0)     img = &icon_weather_yu;
+
+        if (img != NULL)
+        {
+            st7735_draw_image(0, 16, img->width, img->height, img->data);
+        }
+        else
+        {
+            st7735_write_string(0, 16, weather.weather, &font_ascii_8x16, ST7735_YELLOW, ST7735_BLACK);
+        }
+
+        st7735_write_string(78, 0, weather.temperature, &font_temper_16x32, ST7735_BLUE, ST7735_BLACK);
+        st7735_draw_image(78 + (uint32_t)strlen(weather.temperature) * 16, 8,
+                          icon_wendu.width, icon_wendu.height, icon_wendu.data);
+    }
+}
+
+// 系统信息页刷新（每秒刷一次就够）
+static void page_refresh_info(void)
+{
+    static TickType_t last_tick = 0;
+    char str[64];
+    TickType_t now = xTaskGetTickCount();
+    uint32_t sec;
+
+    if ((now - last_tick) < pdMS_TO_TICKS(1000))
+    {
+        return;
+    }
+    last_tick = now;
+
+    // 堆剩余
+    snprintf(str, sizeof(str), "Heap %u", (unsigned)xPortGetFreeHeapSize());
+    st7735_write_string(0, 16, str, &font_ascii_8x16, ST7735_CYAN, ST7735_BLACK);
+
+    // 运行时长
+    sec = now / configTICK_RATE_HZ;
+    snprintf(str, sizeof(str), "Run %02u:%02u:%02u",
+             (unsigned)(sec / 3600), (unsigned)((sec / 60) % 60), (unsigned)(sec % 60));
+    st7735_write_string(0, 32, str, &font_ascii_8x16, ST7735_CYAN, ST7735_BLACK);
+
+    // 各任务栈余量（单位：字）
+    snprintf(str, sizeof(str), "AT   %u", (unsigned)uxTaskGetStackHighWaterMark(hTaskAT));
+    st7735_write_string(0, 48, str, &font_ascii_8x16, ST7735_GREEN, ST7735_BLACK);
+
+    snprintf(str, sizeof(str), "Disp %u", (unsigned)uxTaskGetStackHighWaterMark(hTaskDisplay));
+    st7735_write_string(0, 64, str, &font_ascii_8x16, ST7735_GREEN, ST7735_BLACK);
+
+    snprintf(str, sizeof(str), "Sens %u", (unsigned)uxTaskGetStackHighWaterMark(hTaskSensor));
+    st7735_write_string(0, 80, str, &font_ascii_8x16, ST7735_GREEN, ST7735_BLACK);
+
+    snprintf(str, sizeof(str), "Mon  %u", (unsigned)uxTaskGetStackHighWaterMark(hTaskMonitor));
+    st7735_write_string(0, 96, str, &font_ascii_8x16, ST7735_GREEN, ST7735_BLACK);
+}
+
+// 显示任务：刷新屏幕 + 按键切页
 static void vTaskDisplay(void *pvParameters)
 {
     (void)pvParameters;
-    char str[64];
+    TickType_t last_key_tick = 0;
 
     // 等联网完成再进主界面，等待期间也要喂心跳
     while (xSemaphoreTake(xSysReadySem, pdMS_TO_TICKS(100)) != pdPASS)
@@ -243,65 +366,34 @@ static void vTaskDisplay(void *pvParameters)
         hb_display++;
     }
 
-    // 主界面固定内容
     lcd_lock();
-    st7735_fill_screen(ST7735_BLACK);
-    st7735_write_string(0, 112, "cky2304023133", &font_ascii_8x16, ST7735_WHITE, ST7735_BLACK);
-    st7735_write_string(48, 48, city_name, &font_ascii_8x16, ST7735_YELLOW, ST7735_BLACK);
+    page_draw_static(g_page);
     lcd_unlock();
 
     TickType_t last_wake = xTaskGetTickCount();
 
     for (;;)
     {
+        // 按键切页（再加 300ms 防连击）
+        if (key_scan() && (xTaskGetTickCount() - last_key_tick) >= pdMS_TO_TICKS(300))
+        {
+            last_key_tick = xTaskGetTickCount();
+            g_page = (g_page + 1) % PAGE_COUNT;
+
+            lcd_lock();
+            page_draw_static(g_page);
+            lcd_unlock();
+        }
+
         lcd_lock();
-
-        // 日期和时间
-        rtc_date_t date;
-        rtc_get_date(&date);
-
-        snprintf(str, sizeof(str), "%02d-%02d-%02d", date.year % 100, date.month, date.day);
-        st7735_write_string(0, 0, str, &font_ascii_8x16, ST7735_WHITE, ST7735_BLACK);
-
-        snprintf(str, sizeof(str), "%02d%s%02d", date.hour, date.second % 2 ? " " : ":", date.minute);
-        st7735_write_string(0, 64, str, &font_time_24x48, ST7735_CYAN, ST7735_BLACK);
-
-        // 有新温度就更新
-        float temper;
-        if (xQueueReceive(xTemperQueue, &temper, 0) == pdPASS)
+        if (g_page == PAGE_CLOCK)
         {
-            snprintf(str, sizeof(str), "%4.1f", temper);
-            st7735_write_string(78, 32, str, &font_ascii_8x16, ST7735_GREEN, ST7735_BLACK);
-            st7735_draw_image(78 + (uint32_t)strlen(str) * 8, 32,
-                              icon_wendu.width, icon_wendu.height, icon_wendu.data);
+            page_refresh_clock();
         }
-
-        // 有新天气就更新
-        weather_t weather;
-        if (xQueueReceive(xWeatherQueue, &weather, 0) == pdPASS)
+        else
         {
-            const st_image_t *img = NULL;
-            if (strcmp(weather.weather, "Cloudy") == 0)        img = &icon_weather_duoyun;
-            else if (strcmp(weather.weather, "Wind") == 0)     img = &icon_weather_feng;
-            else if (strcmp(weather.weather, "Clear") == 0)    img = &icon_weather_qing;
-            else if (strcmp(weather.weather, "Snow") == 0)     img = &icon_weather_xue;
-            else if (strcmp(weather.weather, "Overcast") == 0) img = &icon_weather_yin;
-            else if (strcmp(weather.weather, "Rain") == 0)     img = &icon_weather_yu;
-
-            if (img != NULL)
-            {
-                st7735_draw_image(0, 16, img->width, img->height, img->data);
-            }
-            else
-            {
-                st7735_write_string(0, 16, weather.weather, &font_ascii_8x16, ST7735_YELLOW, ST7735_BLACK);
-            }
-
-            st7735_write_string(78, 0, weather.temperature, &font_temper_16x32, ST7735_BLUE, ST7735_BLACK);
-            st7735_draw_image(78 + (uint32_t)strlen(weather.temperature) * 16, 8,
-                              icon_wendu.width, icon_wendu.height, icon_wendu.data);
+            page_refresh_info();
         }
-
         lcd_unlock();
 
         hb_display++;
@@ -320,6 +412,8 @@ int main(void)
     timer_start();
 
     mpu6050_init();
+
+    key_init();
 
     st7735_init();
     st7735_fill_screen(ST7735_BLACK);
@@ -346,12 +440,11 @@ int main(void)
         while (1);
     }
 
-    // 创建任务
-    TaskHandle_t hTask;
-    if (xTaskCreate(vTaskAT,      "AT",      TASK_AT_STACK,      NULL, PRIO_AT,      &hTask) != pdPASS ||
-        xTaskCreate(vTaskDisplay, "Display", TASK_DISPLAY_STACK, NULL, PRIO_DISPLAY, &hTask) != pdPASS ||
-        xTaskCreate(vTaskSensor,  "Sensor",  TASK_SENSOR_STACK,  NULL, PRIO_SENSOR,  &hTask) != pdPASS ||
-        xTaskCreate(vTaskMonitor, "Monitor", TASK_MONITOR_STACK, NULL, PRIO_MONITOR, &hTask) != pdPASS)
+    // 创建任务（保存句柄，系统信息页要用）
+    if (xTaskCreate(vTaskAT,      "AT",      TASK_AT_STACK,      NULL, PRIO_AT,      &hTaskAT) != pdPASS ||
+        xTaskCreate(vTaskDisplay, "Display", TASK_DISPLAY_STACK, NULL, PRIO_DISPLAY, &hTaskDisplay) != pdPASS ||
+        xTaskCreate(vTaskSensor,  "Sensor",  TASK_SENSOR_STACK,  NULL, PRIO_SENSOR,  &hTaskSensor) != pdPASS ||
+        xTaskCreate(vTaskMonitor, "Monitor", TASK_MONITOR_STACK, NULL, PRIO_MONITOR, &hTaskMonitor) != pdPASS)
     {
         st7735_write_string(0, disp_height, "Create task failed", &font_ascii_8x16, ST7735_RED, ST7735_BLACK);
         while (1);
